@@ -18,11 +18,14 @@ pub struct Camera {
 
     pub sensitivity: f32,
     pub speed: f32,
+    pub fast_speed: f32,
 
     last_mouse_pos: glm::Vec2,
     last_size: glm::Vec2,
 
     dirty: bool,
+
+    pub was_dirty: bool,
 }
 
 impl Camera {
@@ -32,6 +35,7 @@ impl Camera {
         up: glm::Vec3,
         sensitivity: f32,
         move_speed: f32,
+        fast_move_speed: f32,
         fov: f32,
         near_clip: f32,
         far_clip: f32,
@@ -42,8 +46,10 @@ impl Camera {
             proj: glm::Mat4::from_element(1.0),
             inv_proj: glm::Mat4::from_element(1.0),
             speed: move_speed,
+            fast_speed: fast_move_speed,
             ray_dirs: vec![],
             dirty: true,
+            was_dirty: false,
             last_mouse_pos: glm::vec2(999999.0, 999999.0),
             last_size: glm::vec2(0.0, 0.0),
             pos,
@@ -82,29 +88,35 @@ impl Camera {
 
         // movement
         if window.get_mouse_down(minifb::MouseButton::Right) {
+            let speed = if window.is_key_down(minifb::Key::LeftShift) {
+                self.fast_speed
+            } else {
+                self.speed
+            };
+
             // keyboard input
             if window.is_key_down(minifb::Key::W) {
-                self.pos += self.forward * self.speed * dt;
+                self.pos += self.forward * speed * dt;
                 self.dirty = true;
             }
             if window.is_key_down(minifb::Key::S) {
-                self.pos -= self.forward * self.speed * dt;
+                self.pos -= self.forward * speed * dt;
                 self.dirty = true;
             }
             if window.is_key_down(minifb::Key::A) {
-                self.pos -= right * self.speed * dt;
+                self.pos -= right * speed * dt;
                 self.dirty = true;
             }
             if window.is_key_down(minifb::Key::D) {
-                self.pos += right * self.speed * dt;
+                self.pos += right * speed * dt;
                 self.dirty = true;
             }
             if window.is_key_down(minifb::Key::Q) {
-                self.pos -= self.up * self.speed * dt;
+                self.pos -= self.up * speed * dt;
                 self.dirty = true;
             }
             if window.is_key_down(minifb::Key::E) {
-                self.pos += self.up * self.speed * dt;
+                self.pos += self.up * speed * dt;
                 self.dirty = true;
             }
 
@@ -124,6 +136,7 @@ impl Camera {
         }
 
         // update camera
+        self.was_dirty = self.dirty;
         if self.dirty {
             self.dirty = false;
 
