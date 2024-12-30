@@ -60,7 +60,7 @@ fn raytrace(world: &World, ray_origin: &glm::Vec3, ray_dir: &glm::Vec3) -> glm::
     let mut curr_ray_dir = *ray_dir;
     let mut hit_light_source = false;
 
-    for i in 0..(world.max_bounces) {
+    for _ in 0..(world.max_bounces) {
         for sphere in &world.objects {
             let origin = &(curr_ray_origin - sphere.pos);
 
@@ -118,13 +118,15 @@ fn raytrace(world: &World, ray_origin: &glm::Vec3, ray_dir: &glm::Vec3) -> glm::
 
             if sphere.emission > 0.0 {
                 hit_light_source = true;
+                break; // i think we should break here?
             }
-        } else {
-            // note: below snippet is to see difference between dark sphere and atmosphere
-            // return glm::vec4(0.0, 0.0, 0.2, 1.0);
 
-            break;
+            continue;
         }
+
+        // note: below snippet is to see difference between dark sphere and atmosphere
+        // return glm::vec4(0.0, 0.0, 0.2, 1.0);
+        break;
     }
 
     if hit_light_source {
@@ -145,6 +147,7 @@ fn main() {
         },
     )
     .unwrap();
+
     let mut buffer: Vec<u32> = vec![0; window.get_size().0 * window.get_size().1];
 
     let mut camera = Camera::new(
@@ -187,7 +190,7 @@ fn main() {
             },
             Sphere {
                 pos: glm::vec3(2.0, 4.0, -10.0),
-                radius: 5.0,
+                radius: 0.5,
                 color: glm::vec3(1.0, 1.0, 1.0),
                 emission: 1.0,
             },
