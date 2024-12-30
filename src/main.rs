@@ -19,7 +19,15 @@ struct World {
     objects: Vec<Sphere>,
     unlit: bool,
     max_bounces: usize,
-    pixel_sample_count: usize,
+    num_samples: usize,
+}
+
+fn vec3_from(x: f32) -> glm::Vec3 {
+    glm::vec3(x, x, x)
+}
+
+fn vec4_from(x: f32) -> glm::Vec4 {
+    glm::vec4(x, x, x, x)
 }
 
 // temporarily yoinked from chatgpt because i wanna work on other parts of the raytracer rn
@@ -29,7 +37,7 @@ fn random_hemisphere_direction(normal: glm::Vec3) -> glm::Vec3 {
     let v: f32 = rng.gen();
 
     let theta = 2.0 * std::f32::consts::PI * u;
-    let phi = v.acos();
+    let phi = (2.0 * v - 1.0).acos();
 
     let x = phi.sin() * theta.cos();
     let y = phi.sin() * theta.sin();
@@ -50,17 +58,17 @@ fn random_hemisphere_direction(normal: glm::Vec3) -> glm::Vec3 {
 }
 
 fn raytrace(world: &World, ray_origin: &glm::Vec3, ray_dir: &glm::Vec3) -> glm::Vec4 {
-    let mut smallest_t = f32::MAX;
     let mut selected_sphere: Option<&Sphere> = None;
 
-    let mut ray_color = glm::vec4(1.0, 1.0, 1.0, 1.0);
+    let mut ray_color = vec4_from(1.0);
     let mut light = glm::vec4(0.0, 0.0, 0.0, 1.0);
 
     let mut curr_ray_origin = *ray_origin;
     let mut curr_ray_dir = *ray_dir;
-    let mut hit_light_source = false;
 
     for _ in 0..(world.max_bounces) {
+        let mut smallest_t = f32::MAX;
+
         for sphere in &world.objects {
             let origin = &(curr_ray_origin - sphere.pos);
 
@@ -82,8 +90,6 @@ fn raytrace(world: &World, ray_origin: &glm::Vec3, ray_dir: &glm::Vec3) -> glm::
         }
 
         if let Some(sphere) = selected_sphere {
-            // note: need to handle light dropoff and surfaces absorbing light
-
             let origin = &(curr_ray_origin - sphere.pos);
 
             let hit_point = origin + curr_ray_dir * smallest_t;
@@ -107,33 +113,25 @@ fn raytrace(world: &World, ray_origin: &glm::Vec3, ray_dir: &glm::Vec3) -> glm::
                 return ray_color;
             }
 
-            let emitted_light = glm::vec4(
+            // note: something about light dropoff based on distance
+
+            light += glm::vec4(
                 sphere.emission * sphere.color.x,
                 sphere.emission * sphere.color.y,
                 sphere.emission * sphere.color.z,
                 1.0,
-            );
+            )
+            .component_mul(&ray_color);
 
-            light += emitted_light.component_mul(&ray_color);
-
-            if sphere.emission > 0.0 {
-                hit_light_source = true;
-                break; // i think we should break here?
-            }
-
-            continue;
+            light = glm::vec4(light.x.min(1.0), light.y.min(1.0), light.z.min(1.0), 1.0);
+        } else {
+            // note: below snippet is to see difference between dark sphere and atmosphere
+            // return glm::vec4(0.0, 0.0, 0.2, 1.0);
+            break;
         }
-
-        // note: below snippet is to see difference between dark sphere and atmosphere
-        // return glm::vec4(0.0, 0.0, 0.2, 1.0);
-        break;
     }
 
-    if hit_light_source {
-        light
-    } else {
-        glm::vec4(0.0, 0.0, 0.0, 1.0)
-    }
+    light
 }
 
 fn main() {
@@ -147,7 +145,6 @@ fn main() {
         },
     )
     .unwrap();
-
     let mut buffer: Vec<u32> = vec![0; window.get_size().0 * window.get_size().1];
 
     let mut camera = Camera::new(
@@ -155,8 +152,8 @@ fn main() {
         glm::vec3(0.0, 0.0, -1.0),
         glm::vec3(0.0, 1.0, 0.0),
         0.005,
-        0.5,
         3.0,
+        10.0,
         45.0,
         0.1,
         100.0,
@@ -173,8 +170,8 @@ fn main() {
             Sphere {
                 pos: glm::vec3(0.0, 0.5, 0.0),
                 radius: 0.5,
-                color: glm::vec3(0.8, 0.0, 0.2),
-                emission: 0.0,
+                color: glm::vec3(1.0, 1.0, 1.0),
+                emission: 1.0,
             },
             Sphere {
                 pos: glm::vec3(-2.0, 1.0, 0.0),
@@ -189,15 +186,15 @@ fn main() {
                 emission: 0.0,
             },
             Sphere {
-                pos: glm::vec3(2.0, 4.0, -10.0),
-                radius: 0.5,
+                pos: glm::vec3(1.5, 4.0, -20.0),
+                radius: 10.0,
                 color: glm::vec3(1.0, 1.0, 1.0),
                 emission: 1.0,
             },
         ],
         unlit: true,
-        max_bounces: 10,
-        pixel_sample_count: 10,
+        max_bounces: 4,
+        num_samples: 10,
     };
 
     let mut font_renderer =
@@ -233,14 +230,16 @@ fn main() {
                 font6x8::new_renderer(window.get_size().0, window.get_size().1, 0xff_ff_ff);
         }
 
-        // allow toggling unlit mode
-        if window.is_key_pressed(minifb::Key::U, minifb::KeyRepeat::No) {
-            world.unlit = !world.unlit;
-        }
-
         // update camera
         camera.update(&window, delta_time);
 
+        // allow toggling unlit mode
+        if window.is_key_pressed(minifb::Key::U, minifb::KeyRepeat::No) {
+            world.unlit = !world.unlit;
+            camera.was_dirty = true;
+        }
+
+        // logic for resetting frame averaging
         if camera.was_dirty {
             rendered_frames = 0;
             last_render = vec![vec4(0.0, 0.0, 0.0, 1.0); window.get_size().0 * window.get_size().1];
@@ -254,45 +253,49 @@ fn main() {
         }
 
         // render scene
-        let samples = if world.unlit {
-            1
-        } else {
-            world.pixel_sample_count
-        };
-
+        let samples = if world.unlit { 1 } else { world.num_samples };
         for y in 0..window_size.1 {
             for x in 0..window_size.0 {
-                let id = y * window_size.0 + x;
+                let index = y * window_size.0 + x;
 
-                // multiple samples
-                let mut total_color = glm::vec4(0.0, 0.0, 0.0, 0.0);
-                for _ in 0..(samples) {
-                    total_color += raytrace(&world, &camera.pos, &camera.ray_dirs[id]);
+                // multiple samples (note: wtf is something wrong with this as well
+                let mut total_color = vec4_from(0.0);
+                for _ in 0..samples {
+                    total_color += raytrace(&world, &camera.pos, &camera.ray_dirs[index]);
                 }
                 total_color /= samples as f32;
 
+                // frame averaging
                 let weight = 1.0 / (rendered_frames + 1) as f32;
-                let average = last_render[id] * (1.0 - weight) + total_color * weight;
+                let average = last_render[index] * (1.0 - weight) + total_color * weight;
 
+                // apply color
                 let red = (average.x * 255.0) as u32;
                 let green = (average.y * 255.0) as u32;
                 let blue = (average.z * 255.0) as u32;
-
-                buffer[id] = (red << 16) | (green << 8) | blue;
-
-                last_render[id] = average;
+                buffer[index] = (red << 16) | (green << 8) | blue;
+                last_render[index] = average;
             }
         }
 
         // render ui
+        // background
+        for x in 0..128 {
+            for y in 0..46 {
+                buffer[y * window_size.0 + x] = 0x3a_3a_3a;
+            }
+        }
+
+        // text
         font_renderer.draw_text(
             &mut buffer,
             10,
             10,
             format!(
-                "FPS: {}\nFrame time: {:.2}ms",
+                "Fps: {}\nFrame time: {}ms\nUnlit: {}",
                 (1.0 / frame_time) as i32,
-                frame_time * 1000.0
+                (frame_time * 1000.0) as i32,
+                world.unlit
             )
             .as_str(),
         );
