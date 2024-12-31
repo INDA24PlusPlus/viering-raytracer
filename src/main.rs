@@ -1,5 +1,5 @@
 extern crate nalgebra_glm as glm;
-use glm::{vec4, Vec4};
+use glm::{vec3, Vec3};
 use minifb::{Window, WindowOptions};
 use minifb_fonts::*;
 use rand::Rng;
@@ -8,12 +8,16 @@ use std::time::Instant;
 mod camera;
 use crate::camera::Camera;
 
+mod utils;
+use crate::utils::*;
+
+#[derive(Clone)]
 struct Sphere {
     pos: glm::Vec3,
     radius: f32,
     color: glm::Vec3,
     emission: f32,
-    reflective: bool,
+    reflectiveness: f32,
 }
 
 struct World {
@@ -24,40 +28,33 @@ struct World {
     num_samples: usize,
 }
 
-fn vec3_from(x: f32) -> glm::Vec3 {
-    glm::vec3(x, x, x)
+struct HitData {
+    point: glm::Vec3,
+    t: f32, // for distance calculation later on
+    sphere: Sphere,
 }
 
-fn vec4_from(x: f32) -> glm::Vec4 {
-    glm::vec4(x, x, x, x)
+struct Ray {
+    origin: glm::Vec3,
+    dir: glm::Vec3,
 }
 
-fn vec3_rand_unit() -> glm::Vec3 {
-    let mut rng = rand::thread_rng();
-
-    let theta = rng.gen_range(0.0..std::f32::consts::PI * 2.0);
-    let phi = rng.gen_range(0.0..std::f32::consts::PI);
-
-    glm::vec3(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos())
+impl Ray {
+    fn new(origin: glm::Vec3, dir: glm::Vec3) -> Self {
+        Ray { origin, dir }
+    }
 }
 
-fn raytrace(world: &World, ray_origin: &glm::Vec3, ray_dir: &glm::Vec3) -> glm::Vec4 {
-    let mut selected_sphere: Option<&Sphere> = None;
-
-    let mut ray_color = vec4_from(1.0);
-    let mut light = glm::vec4(0.0, 0.0, 0.0, 1.0);
-
-    let mut curr_ray_origin = *ray_origin;
-    let mut curr_ray_dir = *ray_dir;
-
-    for _ in 0..(world.max_bounces) {
+impl World {
+    fn hit(&self, ray: &Ray) -> Option<HitData> {
         let mut smallest_t = f32::MAX;
+        let mut selected_sphere: Option<&Sphere> = None;
 
-        for sphere in &world.objects {
-            let origin = &(curr_ray_origin - sphere.pos);
+        for sphere in &self.objects {
+            let origin = &(ray.origin - sphere.pos);
 
-            let a = glm::dot(&curr_ray_dir, &curr_ray_dir);
-            let b = 2.0 * glm::dot(&origin, &curr_ray_dir);
+            let a = glm::dot(&ray.dir, &ray.dir);
+            let b = 2.0 * glm::dot(&origin, &ray.dir);
             let c = glm::dot(&origin, &origin) - sphere.radius * sphere.radius;
 
             let disc = b * b - 4.0 * a * c;
@@ -74,29 +71,45 @@ fn raytrace(world: &World, ray_origin: &glm::Vec3, ray_dir: &glm::Vec3) -> glm::
         }
 
         if let Some(sphere) = selected_sphere {
-            let origin = &(curr_ray_origin - sphere.pos);
+            let origin = &(ray.origin - sphere.pos);
+            let hit_point = origin + ray.dir * smallest_t;
 
-            let hit_point = origin + curr_ray_dir * smallest_t;
-            let normal = glm::normalize(&hit_point);
+            return Some(HitData {
+                point: hit_point,
+                t: smallest_t,
+                sphere: sphere.clone(),
+            });
+        }
 
-            curr_ray_origin = hit_point;
+        None
+    }
+}
 
-            curr_ray_dir = if sphere.reflective {
-                normal
+fn raytrace(world: &World, ray: Ray) -> glm::Vec3 {
+    let mut ray_color = vec3_from(1.0);
+    let mut light = vec3_from(0.0);
+    let mut curr_ray = ray;
+
+    let mut rng = rand::thread_rng();
+
+    for _ in 0..(world.max_bounces) {
+        let hit = world.hit(&curr_ray);
+
+        if let Some(hit) = hit {
+            curr_ray.origin = hit.point;
+            let normal = glm::normalize(&hit.point);
+
+            curr_ray.dir = if rng.gen::<f32>() < hit.sphere.reflectiveness {
+                curr_ray.dir - 2.0 * glm::dot(&curr_ray.dir, &normal) * normal
             } else {
-                normal + vec3_rand_unit()
+                glm::normalize(&(normal + vec3_rand_unit()))
             };
 
-            if ray_color == glm::vec4(0.0, 0.0, 0.0, 1.0) {
-                ray_color = glm::vec4(sphere.color.x, sphere.color.y, sphere.color.z, 1.0);
-            } else {
-                ray_color = glm::vec4(
-                    ray_color.x * sphere.color.x,
-                    ray_color.y * sphere.color.y,
-                    ray_color.z * sphere.color.z,
-                    1.0,
-                );
-            }
+            ray_color = glm::vec3(
+                ray_color.x * hit.sphere.color.x,
+                ray_color.y * hit.sphere.color.y,
+                ray_color.z * hit.sphere.color.z,
+            );
 
             if world.unlit {
                 return ray_color;
@@ -104,18 +117,15 @@ fn raytrace(world: &World, ray_origin: &glm::Vec3, ray_dir: &glm::Vec3) -> glm::
 
             // note: something about light dropoff based on distance
 
-            light += glm::vec4(
-                sphere.emission * sphere.color.x,
-                sphere.emission * sphere.color.y,
-                sphere.emission * sphere.color.z,
-                1.0,
+            light += glm::vec3(
+                hit.sphere.emission * hit.sphere.color.x,
+                hit.sphere.emission * hit.sphere.color.y,
+                hit.sphere.emission * hit.sphere.color.z,
             )
             .component_mul(&ray_color);
 
-            light = glm::vec4(light.x.min(1.0), light.y.min(1.0), light.z.min(1.0), 1.0);
+            light = glm::vec3(light.x.min(1.0), light.y.min(1.0), light.z.min(1.0));
         } else {
-            // note: below snippet is to see difference between dark sphere and atmosphere
-            // return glm::vec4(0.0, 0.0, 0.2, 1.0);
             break;
         }
     }
@@ -155,40 +165,40 @@ fn main() {
                 radius: 10.0,
                 color: glm::vec3(0.6, 0.0, 0.8),
                 emission: 0.0,
-                reflective: false,
+                reflectiveness: 0.5,
             },
             Sphere {
                 pos: glm::vec3(1.0, 1.0, 0.0),
                 radius: 1.0,
                 color: glm::vec3(1.0, 1.0, 1.0),
-                emission: 1.0,
-                reflective: false,
+                emission: 0.0,
+                reflectiveness: 0.8,
             },
             Sphere {
                 pos: glm::vec3(-2.0, 1.0, 0.0),
                 radius: 1.0,
                 color: glm::vec3(0.0, 0.6, 0.0),
                 emission: 0.0,
-                reflective: false,
+                reflectiveness: 0.0,
             },
             Sphere {
                 pos: glm::vec3(1.0, 2.2, -4.0),
                 radius: 0.7,
                 color: glm::vec3(1.0, 0.4, 0.0),
                 emission: 0.0,
-                reflective: false,
+                reflectiveness: 0.0,
             },
             Sphere {
                 pos: glm::vec3(1.5, 4.0, -20.0),
                 radius: 10.0,
                 color: glm::vec3(1.0, 1.0, 1.0),
                 emission: 1.0,
-                reflective: false,
+                reflectiveness: 0.0,
             },
         ],
-        unlit: true,
+        unlit: true, // start in unlit to make it easier to position camera
         frame_averaging: true,
-        max_bounces: 5,
+        max_bounces: 3,
         num_samples: 10,
     };
 
@@ -202,8 +212,8 @@ fn main() {
 
     let mut last_window_size = window.get_size();
 
-    let mut last_render: Vec<Vec4> =
-        vec![vec4(0.0, 0.0, 0.0, 1.0); window.get_size().0 * window.get_size().1];
+    let mut last_render: Vec<Vec3> =
+        vec![vec3(0.0, 0.0, 0.0); window.get_size().0 * window.get_size().1];
     let mut rendered_frames = 0;
 
     while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
@@ -237,7 +247,7 @@ fn main() {
         // logic for resetting frame averaging
         if camera.was_dirty {
             rendered_frames = 0;
-            last_render = vec![vec4(0.0, 0.0, 0.0, 1.0); window.get_size().0 * window.get_size().1];
+            last_render = vec![vec3(0.0, 0.0, 0.0); window.get_size().0 * window.get_size().1];
         }
 
         // update frame time
@@ -254,9 +264,9 @@ fn main() {
                 let index = y * window_size.0 + x;
 
                 // multiple samples (note: wtf is something wrong with this as well
-                let mut total_color = vec4_from(0.0);
+                let mut total_color = vec3_from(0.0);
                 for _ in 0..samples {
-                    total_color += raytrace(&world, &camera.pos, &camera.ray_dirs[index]);
+                    total_color += raytrace(&world, Ray::new(camera.pos, camera.ray_dirs[index]));
                 }
                 total_color /= samples as f32;
 
