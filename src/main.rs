@@ -72,7 +72,7 @@ impl World {
 
         if let Some(sphere) = selected_sphere {
             let origin = &(ray.origin - sphere.pos);
-            let hit_point = origin + ray.dir * smallest_t;
+            let hit_point = ray.origin + ray.dir * smallest_t;
 
             return Some(HitData {
                 point: hit_point,
@@ -97,7 +97,7 @@ fn raytrace(world: &World, ray: Ray) -> glm::Vec3 {
 
         if let Some(hit) = hit {
             curr_ray.origin = hit.point;
-            let normal = glm::normalize(&hit.point);
+            let normal = glm::normalize(&(hit.point - hit.sphere.pos));
 
             curr_ray.dir = if rng.gen::<f32>() < hit.sphere.reflectiveness {
                 curr_ray.dir - 2.0 * glm::dot(&curr_ray.dir, &normal) * normal
