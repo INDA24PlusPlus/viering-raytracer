@@ -13,11 +13,13 @@ struct Sphere {
     radius: f32,
     color: glm::Vec3,
     emission: f32,
+    reflective: bool,
 }
 
 struct World {
     objects: Vec<Sphere>,
     unlit: bool,
+    frame_averaging: bool,
     max_bounces: usize,
     num_samples: usize,
 }
@@ -30,31 +32,13 @@ fn vec4_from(x: f32) -> glm::Vec4 {
     glm::vec4(x, x, x, x)
 }
 
-// temporarily yoinked from chatgpt because i wanna work on other parts of the raytracer rn
-fn random_hemisphere_direction(normal: glm::Vec3) -> glm::Vec3 {
+fn vec3_rand_unit() -> glm::Vec3 {
     let mut rng = rand::thread_rng();
-    let u: f32 = rng.gen();
-    let v: f32 = rng.gen();
 
-    let theta = 2.0 * std::f32::consts::PI * u;
-    let phi = (2.0 * v - 1.0).acos();
+    let theta = rng.gen_range(0.0..std::f32::consts::PI * 2.0);
+    let phi = rng.gen_range(0.0..std::f32::consts::PI);
 
-    let x = phi.sin() * theta.cos();
-    let y = phi.sin() * theta.sin();
-    let z = phi.cos();
-
-    let local_dir = glm::vec3(x, y, z);
-
-    let tangent = if normal.y.abs() < 1e-4 {
-        glm::normalize(&glm::cross(&normal, &glm::vec3(0.0, 1.0, 0.0)))
-    } else {
-        glm::normalize(&glm::cross(&normal, &glm::vec3(1.0, 0.0, 0.0)))
-    };
-    let bitangent = glm::cross(&normal, &tangent);
-
-    let world_dir = local_dir.x * tangent + local_dir.y * bitangent + local_dir.z * normal;
-
-    glm::normalize(&world_dir)
+    glm::vec3(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos())
 }
 
 fn raytrace(world: &World, ray_origin: &glm::Vec3, ray_dir: &glm::Vec3) -> glm::Vec4 {
@@ -96,7 +80,12 @@ fn raytrace(world: &World, ray_origin: &glm::Vec3, ray_dir: &glm::Vec3) -> glm::
             let normal = glm::normalize(&hit_point);
 
             curr_ray_origin = hit_point;
-            curr_ray_dir = random_hemisphere_direction(normal);
+
+            curr_ray_dir = if sphere.reflective {
+                normal
+            } else {
+                normal + vec3_rand_unit()
+            };
 
             if ray_color == glm::vec4(0.0, 0.0, 0.0, 1.0) {
                 ray_color = glm::vec4(sphere.color.x, sphere.color.y, sphere.color.z, 1.0);
@@ -166,34 +155,40 @@ fn main() {
                 radius: 10.0,
                 color: glm::vec3(0.6, 0.0, 0.8),
                 emission: 0.0,
+                reflective: false,
             },
             Sphere {
-                pos: glm::vec3(0.0, 0.5, 0.0),
-                radius: 0.5,
+                pos: glm::vec3(1.0, 1.0, 0.0),
+                radius: 1.0,
                 color: glm::vec3(1.0, 1.0, 1.0),
                 emission: 1.0,
+                reflective: false,
             },
             Sphere {
                 pos: glm::vec3(-2.0, 1.0, 0.0),
                 radius: 1.0,
                 color: glm::vec3(0.0, 0.6, 0.0),
                 emission: 0.0,
+                reflective: false,
             },
             Sphere {
                 pos: glm::vec3(1.0, 2.2, -4.0),
                 radius: 0.7,
-                color: glm::vec3(1.0, 0.6, 0.0),
+                color: glm::vec3(1.0, 0.4, 0.0),
                 emission: 0.0,
+                reflective: false,
             },
             Sphere {
                 pos: glm::vec3(1.5, 4.0, -20.0),
                 radius: 10.0,
                 color: glm::vec3(1.0, 1.0, 1.0),
                 emission: 1.0,
+                reflective: false,
             },
         ],
         unlit: true,
-        max_bounces: 4,
+        frame_averaging: true,
+        max_bounces: 5,
         num_samples: 10,
     };
 
@@ -266,15 +261,20 @@ fn main() {
                 total_color /= samples as f32;
 
                 // frame averaging
-                let weight = 1.0 / (rendered_frames + 1) as f32;
-                let average = last_render[index] * (1.0 - weight) + total_color * weight;
+                let out = if world.frame_averaging {
+                    let weight = 1.0 / (rendered_frames + 1) as f32;
+                    last_render[index] * (1.0 - weight) + total_color * weight
+                } else {
+                    total_color
+                };
 
                 // apply color
-                let red = (average.x * 255.0) as u32;
-                let green = (average.y * 255.0) as u32;
-                let blue = (average.z * 255.0) as u32;
+                let red = (out.x * 255.0) as u32;
+                let green = (out.y * 255.0) as u32;
+                let blue = (out.z * 255.0) as u32;
                 buffer[index] = (red << 16) | (green << 8) | blue;
-                last_render[index] = average;
+
+                last_render[index] = out;
             }
         }
 
