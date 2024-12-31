@@ -3,6 +3,9 @@ use glm::{vec3, Vec3};
 use minifb::{Window, WindowOptions};
 use minifb_fonts::*;
 use rand::Rng;
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 use std::time::Instant;
 
 mod camera;
@@ -199,7 +202,7 @@ fn main() {
         unlit: true, // start in unlit to make it easier to position camera
         frame_averaging: true,
         max_bounces: 3,
-        num_samples: 10,
+        num_samples: 30,
     };
 
     let mut font_renderer =
@@ -259,33 +262,33 @@ fn main() {
 
         // render scene
         let samples = if world.unlit { 1 } else { world.num_samples };
-        for y in 0..window_size.1 {
-            for x in 0..window_size.0 {
-                let index = y * window_size.0 + x;
 
-                // multiple samples (note: wtf is something wrong with this as well
-                let mut total_color = vec3_from(0.0);
-                for _ in 0..samples {
-                    total_color += raytrace(&world, Ray::new(camera.pos, camera.ray_dirs[index]));
-                }
-                total_color /= samples as f32;
-
-                // frame averaging
-                let out = if world.frame_averaging {
-                    let weight = 1.0 / (rendered_frames + 1) as f32;
-                    last_render[index] * (1.0 - weight) + total_color * weight
-                } else {
-                    total_color
-                };
-
-                // apply color
-                let red = (out.x * 255.0) as u32;
-                let green = (out.y * 255.0) as u32;
-                let blue = (out.z * 255.0) as u32;
-                buffer[index] = (red << 16) | (green << 8) | blue;
-
-                last_render[index] = out;
+        let mut out: Vec<glm::Vec3> = vec![vec3_from(0.0); window_size.0 * window_size.1];
+        out.par_iter_mut().enumerate().for_each(|(i, color)| {
+            // multiple samples
+            let mut total_color = vec3_from(0.0);
+            for _ in 0..samples {
+                total_color += raytrace(&world, Ray::new(camera.pos, camera.ray_dirs[i]));
             }
+            total_color /= samples as f32;
+
+            // frame averaging
+            if world.frame_averaging {
+                let weight = 1.0 / (rendered_frames + 1) as f32;
+                *color = last_render[i] * (1.0 - weight) + total_color * weight
+            } else {
+                *color = total_color
+            }
+        });
+
+        // apply color
+        for (i, color) in out.iter().enumerate() {
+            let red = (color.x * 255.0) as u32;
+            let green = (color.y * 255.0) as u32;
+            let blue = (color.z * 255.0) as u32;
+            buffer[i] = (red << 16) | (green << 8) | blue;
+
+            last_render[i] = *color;
         }
 
         // render ui
