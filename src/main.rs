@@ -3,9 +3,7 @@ use glm::{vec3, Vec3};
 use minifb::{Window, WindowOptions};
 use minifb_fonts::*;
 use rand::Rng;
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
-};
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use std::time::Instant;
 
 mod camera;
@@ -13,6 +11,17 @@ use crate::camera::Camera;
 
 mod utils;
 use crate::utils::*;
+
+/*
+    note: whats left to do (the important stuff at least)
+    - distance calculation for lighting, some kind of light energy dropoff on hit
+    - fix noise in the image
+    - add a nicer way to place objects, maybe a config file
+    - add something like egui to make it easier to change settings
+    - make keyboard input work when the game is slow af
+    - antialiasing (if i have time)
+    - move to the gpu (if i have time)
+*/
 
 #[derive(Clone)]
 struct Sphere {
@@ -73,18 +82,11 @@ impl World {
             }
         }
 
-        if let Some(sphere) = selected_sphere {
-            let origin = &(ray.origin - sphere.pos);
-            let hit_point = ray.origin + ray.dir * smallest_t;
-
-            return Some(HitData {
-                point: hit_point,
-                t: smallest_t,
-                sphere: sphere.clone(),
-            });
-        }
-
-        None
+        selected_sphere.map(|sphere| HitData {
+            point: ray.origin + ray.dir * smallest_t,
+            t: smallest_t,
+            sphere: sphere.clone(),
+        })
     }
 }
 
