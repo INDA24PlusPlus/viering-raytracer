@@ -1,5 +1,5 @@
 extern crate nalgebra_glm as glm;
-use glm::{vec3, Vec3};
+use glm::{dot, vec3, Vec3};
 use minifb::{Window, WindowOptions};
 use minifb_fonts::*;
 use rand::Rng;
@@ -19,21 +19,98 @@ use crate::utils::*;
     - add a nicer way to place objects, maybe a config file
     - add something like egui to make it easier to change settings
     - make keyboard input work when the game is slow af
-    - antialiasing (if i have time)
-    - move to the gpu (if i have time)
 */
+
+trait GameObject: Sync + Send {
+    fn hit(&self, ray: &Ray) -> Option<HitData>;
+    fn material(&self) -> &Material;
+    fn pos(&self) -> glm::Vec3;
+}
 
 #[derive(Clone)]
 struct Sphere {
     pos: glm::Vec3,
     radius: f32,
+    material: Material,
+}
+
+impl GameObject for Sphere {
+    fn hit(&self, ray: &Ray) -> Option<HitData> {
+        let origin = ray.origin - self.pos;
+        let a = dot(&ray.dir, &ray.dir);
+        let b = 2.0 * dot(&origin, &ray.dir);
+        let c = dot(&origin, &origin) - self.radius * self.radius;
+
+        let disc = b * b - 4.0 * a * c;
+        if disc < 0.0 {
+            return None;
+        }
+
+        let t = (-b - disc.sqrt()) / (2.0 * a);
+        if t < 0.0 {
+            return None;
+        }
+
+        Some(HitData {
+            point: ray.origin + ray.dir * t,
+            t,
+            object: Box::new(self.clone()),
+        })
+    }
+
+    fn material(&self) -> &Material {
+        &self.material
+    }
+
+    fn pos(&self) -> glm::Vec3 {
+        self.pos
+    }
+}
+
+#[derive(Clone)]
+struct Plane {
+    pos: glm::Vec3,
+    normal: glm::Vec3,
+    material: Material,
+}
+
+impl GameObject for Plane {
+    fn hit(&self, ray: &Ray) -> Option<HitData> {
+        let d = dot(&self.normal, &ray.dir);
+        if d.abs() < 1e-6 {
+            return None;
+        }
+
+        let t = dot(&(self.pos - ray.origin), &self.normal) / d;
+        if t < 0.0 {
+            return None;
+        }
+
+        Some(HitData {
+            point: ray.origin + ray.dir * t,
+            t,
+            object: Box::new(self.clone()),
+        })
+    }
+
+    fn material(&self) -> &Material {
+        &self.material
+    }
+
+    fn pos(&self) -> glm::Vec3 {
+        self.pos
+    }
+}
+
+#[derive(Clone)]
+struct Material {
     color: glm::Vec3,
     emission: f32,
     reflectiveness: f32,
 }
 
 struct World {
-    objects: Vec<Sphere>,
+    objects: Vec<Box<dyn GameObject>>,
     unlit: bool,
     frame_averaging: bool,
     max_bounces: usize,
@@ -43,7 +120,7 @@ struct World {
 struct HitData {
     point: glm::Vec3,
     t: f32, // for distance calculation later on
-    sphere: Sphere,
+    object: Box<dyn GameObject>,
 }
 
 struct Ray {
@@ -60,33 +137,18 @@ impl Ray {
 impl World {
     fn hit(&self, ray: &Ray) -> Option<HitData> {
         let mut smallest_t = f32::MAX;
-        let mut selected_sphere: Option<&Sphere> = None;
+        let mut closest_hit: Option<HitData> = None;
 
-        for sphere in &self.objects {
-            let origin = &(ray.origin - sphere.pos);
-
-            let a = glm::dot(&ray.dir, &ray.dir);
-            let b = 2.0 * glm::dot(&origin, &ray.dir);
-            let c = glm::dot(&origin, &origin) - sphere.radius * sphere.radius;
-
-            let disc = b * b - 4.0 * a * c;
-            if disc < 0.0 {
-                continue;
-            }
-
-            let t = (-b - disc.sqrt()) / (2.0 * a); // closest intersect point
-
-            if t >= 0.0 && t < smallest_t {
-                smallest_t = t;
-                selected_sphere = Some(sphere);
+        for object in &self.objects {
+            if let Some(hit) = object.hit(ray) {
+                if hit.t < smallest_t {
+                    smallest_t = hit.t;
+                    closest_hit = Some(hit);
+                }
             }
         }
 
-        selected_sphere.map(|sphere| HitData {
-            point: ray.origin + ray.dir * smallest_t,
-            t: smallest_t,
-            sphere: sphere.clone(),
-        })
+        closest_hit
     }
 }
 
@@ -102,18 +164,18 @@ fn raytrace(world: &World, ray: Ray) -> glm::Vec3 {
 
         if let Some(hit) = hit {
             curr_ray.origin = hit.point;
-            let normal = glm::normalize(&(hit.point - hit.sphere.pos));
+            let normal = glm::normalize(&(hit.point - hit.object.pos()));
 
-            curr_ray.dir = if rng.gen::<f32>() < hit.sphere.reflectiveness {
+            curr_ray.dir = if rng.gen::<f32>() < hit.object.material().reflectiveness {
                 curr_ray.dir - 2.0 * glm::dot(&curr_ray.dir, &normal) * normal
             } else {
                 glm::normalize(&(normal + vec3_rand_unit()))
             };
 
             ray_color = glm::vec3(
-                ray_color.x * hit.sphere.color.x,
-                ray_color.y * hit.sphere.color.y,
-                ray_color.z * hit.sphere.color.z,
+                ray_color.x * hit.object.material().color.x,
+                ray_color.y * hit.object.material().color.y,
+                ray_color.z * hit.object.material().color.z,
             );
 
             if world.unlit {
@@ -123,9 +185,9 @@ fn raytrace(world: &World, ray: Ray) -> glm::Vec3 {
             // note: something about light dropoff based on distance
 
             light += glm::vec3(
-                hit.sphere.emission * hit.sphere.color.x,
-                hit.sphere.emission * hit.sphere.color.y,
-                hit.sphere.emission * hit.sphere.color.z,
+                hit.object.material().emission * hit.object.material().color.x,
+                hit.object.material().emission * hit.object.material().color.y,
+                hit.object.material().emission * hit.object.material().color.z,
             )
             .component_mul(&ray_color);
 
@@ -165,41 +227,60 @@ fn main() {
 
     let mut world = World {
         objects: vec![
-            Sphere {
+            Box::new(Sphere {
                 pos: glm::vec3(0.0, -10.0, 0.0),
                 radius: 10.0,
-                color: glm::vec3(0.6, 0.0, 0.8),
-                emission: 0.0,
-                reflectiveness: 0.5,
-            },
-            Sphere {
+                material: Material {
+                    color: glm::vec3(0.6, 0.0, 0.8),
+                    emission: 0.0,
+                    reflectiveness: 0.5,
+                },
+            }),
+            Box::new(Sphere {
                 pos: glm::vec3(1.0, 1.0, 0.0),
                 radius: 1.0,
-                color: glm::vec3(1.0, 1.0, 1.0),
-                emission: 0.0,
-                reflectiveness: 0.8,
-            },
-            Sphere {
+                material: Material {
+                    color: glm::vec3(1.0, 1.0, 1.0),
+                    emission: 0.0,
+                    reflectiveness: 0.8,
+                },
+            }),
+            Box::new(Sphere {
                 pos: glm::vec3(-2.0, 1.0, 0.0),
                 radius: 1.0,
-                color: glm::vec3(0.0, 0.6, 0.0),
-                emission: 0.0,
-                reflectiveness: 0.0,
-            },
-            Sphere {
+                material: Material {
+                    color: glm::vec3(0.0, 0.6, 0.0),
+                    emission: 0.0,
+                    reflectiveness: 0.0,
+                },
+            }),
+            Box::new(Sphere {
                 pos: glm::vec3(1.0, 2.2, -4.0),
                 radius: 0.7,
-                color: glm::vec3(1.0, 0.4, 0.0),
-                emission: 0.0,
-                reflectiveness: 0.0,
-            },
-            Sphere {
+                material: Material {
+                    color: glm::vec3(1.0, 0.4, 0.0),
+                    emission: 0.0,
+                    reflectiveness: 0.0,
+                },
+            }),
+            Box::new(Sphere {
                 pos: glm::vec3(1.5, 4.0, -20.0),
                 radius: 10.0,
-                color: glm::vec3(1.0, 1.0, 1.0),
-                emission: 1.0,
-                reflectiveness: 0.0,
-            },
+                material: Material {
+                    color: glm::vec3(1.0, 1.0, 1.0),
+                    emission: 1.0,
+                    reflectiveness: 0.0,
+                },
+            }),
+            Box::new(Plane {
+                pos: glm::vec3(0.0, -5.0, 0.0),
+                normal: glm::vec3(0.0, 1.0, 0.0),
+                material: Material {
+                    color: glm::vec3(1.0, 0.0, 0.0),
+                    emission: 0.0,
+                    reflectiveness: 0.0,
+                },
+            }),
         ],
         unlit: true, // start in unlit to make it easier to position camera
         frame_averaging: true,

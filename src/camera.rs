@@ -70,6 +70,7 @@ impl Camera {
         );
 
         if self.last_mouse_pos == glm::vec2(999999.0, 999999.0) {
+            // very nice
             self.last_mouse_pos = current_mouse_pos;
         }
 
